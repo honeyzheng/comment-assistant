@@ -301,87 +301,253 @@ def fetch_article(url: str, timeout: int = 15) -> Dict[str, str]:
     return result
 
 
+def _extract_json_from_html(html: str, var_name: str) -> dict:
+    """从HTML中提取JS变量赋值的JSON数据（用括号计数器精确匹配）"""
+    marker = f"{var_name} = "
+    start_idx = html.find(marker)
+    if start_idx < 0:
+        # 尝试不带空格的版本
+        marker = f"{var_name}="
+        start_idx = html.find(marker)
+        if start_idx < 0:
+            return {}
+    
+    json_start = start_idx + len(marker)
+    if json_start >= len(html) or html[json_start] != '{':
+        return {}
+    
+    # 用括号计数器找到完整JSON
+    depth = 0
+    i = json_start
+    in_string = False
+    escape_next = False
+    
+    while i < len(html):
+        ch = html[i]
+        if escape_next:
+            escape_next = False
+            i += 1
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+        if not in_string:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+        i += 1
+    
+    if depth != 0:
+        return {}
+    
+    raw_json = html[json_start:i+1]
+    try:
+        return json.loads(raw_json)
+    except json.JSONDecodeError:
+        return {}
+
+
 def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
+    """抓取腾讯新闻文章 - 通过解析页面中的 window.initData"""
     article_id = ""
     match = re.search(r'/a/(\w+)', url)
     if match:
         article_id = match.group(1)
     result["source"] = "腾讯新闻"
 
+    # === 核心方案：直接抓取HTML解析 window.initData ===
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Referer": "https://view.inews.qq.com/",
+        }
+        raw = _make_request(url, headers=headers, timeout=timeout)
+        html = _decode_response(raw)
+        
+        # 提取 <title>
+        title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL)
+        if title_match:
+            title_text = _clean_html(title_match.group(1))
+            # 去掉末尾的"-腾讯新闻"等
+            title_text = re.sub(r'[-_|]\s*(腾讯新闻|腾讯网|新闻)$', '', title_text).strip()
+            if title_text and not result["title"]:
+                result["title"] = title_text
+        
+        # 解析 window.initData
+        init_data = _extract_json_from_html(html, "window.initData")
+        if init_data:
+            content_data = init_data.get("content", {})
+            if isinstance(content_data, dict):
+                # 获取标题
+                if not result["title"] and content_data.get("title"):
+                    result["title"] = content_data["title"]
+                
+                atype = str(content_data.get("atype", ""))
+                
+                # 图文文章：尝试从各种字段获取正文
+                article_body = ""
+                
+                # 从 content_data 直接获取正文字段
+                for key in ["articleBody", "body", "text", "newsContent"]:
+                    val = content_data.get(key)
+                    if val and isinstance(val, str) and len(val) > 50:
+                        article_body = _clean_html(val)
+                        break
+                
+                # 从 content_list 获取
+                if not article_body:
+                    content_list = content_data.get("content_list", [])
+                    if content_list and isinstance(content_list, list):
+                        parts = []
+                        for item in content_list:
+                            if isinstance(item, dict):
+                                t = item.get("content", "") or item.get("text", "") or item.get("value", "")
+                                if t and isinstance(t, str) and len(t.strip()) > 5:
+                                    cleaned = _clean_html(t)
+                                    if cleaned:
+                                        parts.append(cleaned)
+                        if parts:
+                            article_body = "\n".join(parts)
+                
+                # 摘要作为备选
+                abstract = content_data.get("abstract", "")
+                
+                if article_body and len(article_body) > 30:
+                    result["content"] = article_body
+                    return result
+                
+                # 视频文章特殊处理（atype=4）
+                if atype == "4":
+                    # 构造视频文章的描述文本
+                    video_parts = []
+                    video_parts.append(f"[视频文章]")
+                    
+                    if result["title"]:
+                        video_parts.append(f"标题：{result['title']}")
+                    
+                    if abstract:
+                        video_parts.append(f"摘要：{abstract}")
+                    
+                    # 获取频道/作者信息
+                    card = content_data.get("card", {})
+                    if card:
+                        chlname = card.get("chlname", "")
+                        desc = card.get("desc", "")
+                        vip_desc = card.get("vip_desc", "")
+                        if chlname:
+                            video_parts.append(f"频道：{chlname}")
+                        if desc:
+                            video_parts.append(f"频道简介：{desc}")
+                    
+                    # 视频信息
+                    video_info = content_data.get("videoInfo") or content_data.get("videoNewsInfo") or {}
+                    if isinstance(video_info, dict):
+                        v_desc = video_info.get("desc", "") or video_info.get("description", "")
+                        if v_desc:
+                            video_parts.append(f"视频描述：{v_desc}")
+                    
+                    # 获取评论数、点赞等互动信息
+                    comments = content_data.get("comments", "")
+                    if comments:
+                        video_parts.append(f"评论数：{comments}")
+                    
+                    # 相关标签
+                    tag_info = content_data.get("tag_info_item", [])
+                    if tag_info and isinstance(tag_info, list):
+                        tags = [t.get("name", "") for t in tag_info if isinstance(t, dict) and t.get("name")]
+                        if tags:
+                            video_parts.append(f"标签：{'、'.join(tags)}")
+                    
+                    if len(video_parts) > 2:  # 至少有类型标记+标题+其他信息
+                        result["content"] = "\n".join(video_parts)
+                        result["is_video"] = True
+                        return result
+                
+                # 非视频但没找到正文，用abstract
+                if abstract and len(abstract) > 20:
+                    result["content"] = abstract
+                    return result
+        
+        # === initData解析失败的备选：直接从HTML提取 ===
+        # 尝试各种正文容器
+        selectors = [
+            r'class="[^"]*article[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*rich[-_]?text[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*content[-_]?text[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'<article[^>]*>([\s\S]*?)</article>',
+        ]
+        for pattern in selectors:
+            m = re.search(pattern, html, re.DOTALL)
+            if m:
+                text = _clean_html(m.group(1))
+                if len(text) > 80:
+                    result["content"] = text
+                    return result
+        
+        # 从HTML中搜索 "content":"..." 字段（可能是内嵌的JSON数据）
+        content_match = re.search(r'"(?:content|articleBody|newsContent)"\s*:\s*"((?:[^"\\]|\\.){80,})"', html)
+        if content_match:
+            raw_content = content_match.group(1)
+            try:
+                decoded = raw_content.encode('utf-8').decode('unicode_escape')
+            except:
+                decoded = raw_content
+            cleaned = _clean_html(decoded)
+            if len(cleaned) > 50:
+                result["content"] = cleaned
+                return result
+                
+    except Exception as e:
+        logger.info(f"QQ News HTML parse failed: {e}")
+
+    # === 备选方案：尝试旧API（可能仍对部分文章有效） ===
     if article_id:
-        # 尝试多个腾讯新闻API
         api_urls = [
             f"https://r.inews.qq.com/getSimpleNews?id={article_id}",
             f"https://i.news.qq.com/trpc.qqnews_web.kv_cache.KvCache/GetNewsContent?msg_id={article_id}",
-            f"https://content.r.qq.com/getQQNewsNormalContent?id={article_id}",
         ]
-        
         for api_url in api_urls:
             try:
                 raw = _make_request(api_url, headers=QQ_API_HEADERS, timeout=timeout)
                 text = raw.decode("utf-8")
                 data = json.loads(text)
                 
-                # 提取标题
                 title = data.get("title") or data.get("data", {}).get("title", "")
                 if title and not result["title"]:
                     result["title"] = title
                 
-                # 提取正文 - 多种格式兼容
                 content_text = ""
-                
-                # 格式1: content.text
                 content_obj = data.get("content", {})
                 if isinstance(content_obj, dict) and content_obj.get("text"):
                     content_text = content_obj["text"]
-                
-                # 格式2: data.content_html
                 if not content_text:
                     content_text = data.get("data", {}).get("content_html", "")
-                
-                # 格式3: data.content
                 if not content_text:
                     dc = data.get("data", {}).get("content", "")
                     if isinstance(dc, str) and len(dc) > 30:
                         content_text = dc
                 
-                # 格式4: newsData.content_list -> paragraphs
-                if not content_text:
-                    content_list = data.get("newsData", {}).get("content_list", [])
-                    if not content_list:
-                        content_list = data.get("data", {}).get("content_list", [])
-                    if content_list:
-                        parts = []
-                        for item in content_list:
-                            if isinstance(item, dict):
-                                t = item.get("content", "") or item.get("text", "") or item.get("value", "")
-                                if t and item.get("type", 0) in [0, 1, "text", "paragraph"]:
-                                    parts.append(t)
-                                elif t and len(t) > 10:
-                                    parts.append(t)
-                        if parts:
-                            content_text = "\n".join(parts)
-                
                 if content_text:
                     cleaned = re.sub(r'<!--(VIDEO|IMG|AD|AIPOS)_\d+-->', '', content_text).strip()
                     if len(cleaned) > 20:
                         result["content"] = _clean_html(content_text)
+                        return result
                 
-                # 格式5: abstract 摘要作为备选
                 if not result["content"] and data.get("abstract"):
                     result["content"] = data["abstract"]
-                if not result["content"]:
-                    abs_text = data.get("data", {}).get("abstract", "")
-                    if abs_text:
-                        result["content"] = abs_text
-                
-                if result["title"] and result["content"]:
                     return result
             except Exception:
                 continue
 
-    # 最后用通用方式抓取网页
-    return _fetch_generic(url, result, timeout)
+    return result
 
 
 def _fetch_weibo(url: str, result: Dict, timeout: int) -> Dict:
