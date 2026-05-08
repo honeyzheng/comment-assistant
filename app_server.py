@@ -129,25 +129,78 @@ def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
     result["source"] = "腾讯新闻"
 
     if article_id:
-        try:
-            api_url = f"https://r.inews.qq.com/getSimpleNews?id={article_id}"
-            raw = _make_request(api_url, headers=QQ_API_HEADERS, timeout=timeout)
-            data = json.loads(raw.decode("utf-8"))
-            if data.get("title"):
-                result["title"] = data["title"]
-            content_obj = data.get("content", {})
-            if isinstance(content_obj, dict) and content_obj.get("text"):
-                content_html = content_obj["text"]
-                cleaned = re.sub(r'<!--(VIDEO|IMG|AD|AIPOS)_\d+-->', '', content_html).strip()
-                if cleaned and len(cleaned) > 20:
-                    result["content"] = _clean_html(content_html)
-            if not result["content"] and data.get("abstract"):
-                result["content"] = data["abstract"]
-            if result["title"] and result["content"]:
-                return result
-        except Exception:
-            pass
+        # 尝试多个腾讯新闻API
+        api_urls = [
+            f"https://r.inews.qq.com/getSimpleNews?id={article_id}",
+            f"https://i.news.qq.com/trpc.qqnews_web.kv_cache.KvCache/GetNewsContent?msg_id={article_id}",
+            f"https://content.r.qq.com/getQQNewsNormalContent?id={article_id}",
+        ]
+        
+        for api_url in api_urls:
+            try:
+                raw = _make_request(api_url, headers=QQ_API_HEADERS, timeout=timeout)
+                text = raw.decode("utf-8")
+                data = json.loads(text)
+                
+                # 提取标题
+                title = data.get("title") or data.get("data", {}).get("title", "")
+                if title and not result["title"]:
+                    result["title"] = title
+                
+                # 提取正文 - 多种格式兼容
+                content_text = ""
+                
+                # 格式1: content.text
+                content_obj = data.get("content", {})
+                if isinstance(content_obj, dict) and content_obj.get("text"):
+                    content_text = content_obj["text"]
+                
+                # 格式2: data.content_html
+                if not content_text:
+                    content_text = data.get("data", {}).get("content_html", "")
+                
+                # 格式3: data.content
+                if not content_text:
+                    dc = data.get("data", {}).get("content", "")
+                    if isinstance(dc, str) and len(dc) > 30:
+                        content_text = dc
+                
+                # 格式4: newsData.content_list -> paragraphs
+                if not content_text:
+                    content_list = data.get("newsData", {}).get("content_list", [])
+                    if not content_list:
+                        content_list = data.get("data", {}).get("content_list", [])
+                    if content_list:
+                        parts = []
+                        for item in content_list:
+                            if isinstance(item, dict):
+                                t = item.get("content", "") or item.get("text", "") or item.get("value", "")
+                                if t and item.get("type", 0) in [0, 1, "text", "paragraph"]:
+                                    parts.append(t)
+                                elif t and len(t) > 10:
+                                    parts.append(t)
+                        if parts:
+                            content_text = "\n".join(parts)
+                
+                if content_text:
+                    cleaned = re.sub(r'<!--(VIDEO|IMG|AD|AIPOS)_\d+-->', '', content_text).strip()
+                    if len(cleaned) > 20:
+                        result["content"] = _clean_html(content_text)
+                
+                # 格式5: abstract 摘要作为备选
+                if not result["content"] and data.get("abstract"):
+                    result["content"] = data["abstract"]
+                if not result["content"]:
+                    abs_text = data.get("data", {}).get("abstract", "")
+                    if abs_text:
+                        result["content"] = abs_text
+                
+                if result["title"] and result["content"]:
+                    return result
+            except Exception:
+                continue
 
+    # 最后用通用方式抓取网页
     return _fetch_generic(url, result, timeout)
 
 
