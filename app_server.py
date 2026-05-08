@@ -30,7 +30,7 @@ def get_ai_config():
     return {
         "api_base": os.environ.get("AI_API_BASE", "https://api.siliconflow.cn/v1"),
         "api_key": os.environ.get("AI_API_KEY", ""),
-        "model": os.environ.get("AI_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
+        "model": os.environ.get("AI_MODEL", "Qwen/Qwen2.5-72B-Instruct"),
     }
 
 
@@ -398,15 +398,23 @@ def generate_comments(title: str, content: str, category: str = "通用",
 
 def _parse_ai_response(raw: str) -> List[Dict]:
     raw = raw.strip()
+    
+    # 提取代码块中的JSON
     if "```" in raw:
         json_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', raw)
         if json_match:
             raw = json_match.group(1).strip()
+    
+    # 尝试解析JSON数组
     try:
         start = raw.find('[')
         end = raw.rfind(']')
         if start != -1 and end != -1 and end > start:
             json_str = raw[start:end+1]
+            # 尝试修复常见JSON问题
+            json_str = json_str.replace('\n', ' ')
+            json_str = re.sub(r',\s*]', ']', json_str)  # 去除尾逗号
+            json_str = re.sub(r',\s*}', '}', json_str)  # 去除对象尾逗号
             comments = json.loads(json_str)
             if isinstance(comments, list) and len(comments) > 0:
                 valid = []
@@ -421,6 +429,44 @@ def _parse_ai_response(raw: str) -> List[Dict]:
                     return valid
     except json.JSONDecodeError:
         pass
+    
+    # 备用方案：逐行匹配单个JSON对象
+    try:
+        objects = re.findall(r'\{[^{}]*"comment"[^{}]*\}', raw)
+        if objects:
+            valid = []
+            for obj_str in objects:
+                try:
+                    c = json.loads(obj_str)
+                    if c.get("comment"):
+                        valid.append({
+                            "comment": c.get("comment", ""),
+                            "persona": c.get("persona", "网友"),
+                            "angle": c.get("angle", ""),
+                        })
+                except json.JSONDecodeError:
+                    continue
+            if valid:
+                return valid
+    except Exception:
+        pass
+    
+    # 最后兜底：把纯文本按行分割当评论
+    lines = [l.strip() for l in raw.split('\n') if l.strip() and len(l.strip()) > 5]
+    if lines:
+        # 去掉可能的序号前缀
+        valid = []
+        for line in lines[:20]:
+            cleaned = re.sub(r'^[\d]+[.、)\]：:]\s*', '', line)
+            if len(cleaned) > 3 and not cleaned.startswith('{') and not cleaned.startswith('['):
+                valid.append({
+                    "comment": cleaned,
+                    "persona": "网友",
+                    "angle": "随机",
+                })
+        if valid:
+            return valid
+    
     return []
 
 
