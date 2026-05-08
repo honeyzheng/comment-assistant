@@ -97,23 +97,203 @@ def validate_url(url: str) -> bool:
         return False
 
 
+def _fetch_via_jina(url: str, timeout: int = 20) -> Dict[str, str]:
+    """使用 Jina Reader API 提取网页正文（免费、支持JS渲染页面）"""
+    result = {"title": "", "content": ""}
+    try:
+        jina_url = f"https://r.jina.ai/{url}"
+        headers = {
+            "Accept": "text/plain",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "X-Return-Format": "text",
+        }
+        raw = _make_request(jina_url, headers=headers, timeout=timeout)
+        text = raw.decode("utf-8", errors="ignore").strip()
+        
+        if text and len(text) > 50:
+            # Jina 返回 markdown 格式，第一行通常是标题
+            lines = text.split('\n')
+            title_line = ""
+            content_lines = []
+            found_title = False
+            
+            for line in lines:
+                stripped = line.strip()
+                if not found_title and stripped.startswith('# '):
+                    title_line = stripped[2:].strip()
+                    found_title = True
+                elif not found_title and stripped.startswith('Title:'):
+                    title_line = stripped[6:].strip()
+                    found_title = True
+                elif stripped and not stripped.startswith('URL Source:') and not stripped.startswith('Markdown Content:'):
+                    content_lines.append(stripped)
+            
+            if title_line:
+                result["title"] = title_line
+            
+            content_text = '\n'.join(content_lines)
+            # 去掉 markdown 图片标记等
+            content_text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', '', content_text)
+            content_text = re.sub(r'\[([^\]]*)\]\([^)]+\)', r'\1', content_text)
+            content_text = re.sub(r'\n{3,}', '\n\n', content_text).strip()
+            
+            if len(content_text) > 30:
+                result["content"] = content_text
+    except Exception as e:
+        logger.info(f"Jina fetch failed for {url}: {e}")
+    return result
+
+
+def _fetch_via_readability_api(url: str, timeout: int = 15) -> Dict[str, str]:
+    """备用：使用 12ft.io 风格的 HTML 直抓 + 加强解析"""
+    result = {"title": "", "content": ""}
+    try:
+        # 用移动端 UA 有时能拿到更完整的内容（绕过一些JS渲染限制）
+        mobile_headers = {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+        }
+        raw = _make_request(url, headers=mobile_headers, timeout=timeout)
+        html = _decode_response(raw)
+        
+        # 标题
+        og_match = re.search(r'<meta[^>]*property="og:title"[^>]*content="([^"]*)"', html)
+        if og_match and og_match.group(1).strip():
+            result["title"] = og_match.group(1).strip()
+        if not result["title"]:
+            title_match = re.search(r'<title[^>]*>(.*?)</title>', html, re.DOTALL)
+            if title_match:
+                result["title"] = _clean_html(title_match.group(1)).split('-')[0].strip()
+        
+        # 正文 - 先尝试 og:description（通常包含完整摘要）
+        og_desc = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
+        description = og_desc.group(1).strip() if og_desc else ""
+        
+        # 正文 - JSON-LD
+        ld_matches = re.findall(r'<script[^>]*type="application/ld\+json"[^>]*>([\s\S]*?)</script>', html)
+        for ld_text in ld_matches:
+            try:
+                ld_data = json.loads(ld_text)
+                if isinstance(ld_data, list):
+                    ld_data = ld_data[0] if ld_data else {}
+                body = ld_data.get("articleBody") or ld_data.get("description") or ""
+                if body and len(body) > 50:
+                    result["content"] = body
+                    return result
+            except (json.JSONDecodeError, IndexError, AttributeError):
+                continue
+        
+        # 正文 - 扩展容器选择器
+        selectors = [
+            r'<article[^>]*>([\s\S]*?)</article>',
+            r'class="[^"]*article[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*article[-_]?body[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*post[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*entry[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*rich[-_]?text[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*news[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*detail[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'class="[^"]*main[-_]?content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'id="[^"]*article[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'id="[^"]*content[^"]*"[^>]*>([\s\S]*?)</div>',
+            r'itemprop="articleBody"[^>]*>([\s\S]*?)</div>',
+            r'data-role="paragraph"[^>]*>([\s\S]*?)</div>',
+        ]
+        for pattern in selectors:
+            match = re.search(pattern, html, re.DOTALL)
+            if match:
+                text = _clean_html(match.group(1))
+                if len(text) > 80:
+                    result["content"] = text
+                    return result
+        
+        # 正文 - 所有 <p> 标签
+        paragraphs = re.findall(r'<p[^>]*>([\s\S]*?)</p>', html, re.DOTALL)
+        if paragraphs:
+            texts = [_clean_html(p) for p in paragraphs if len(_clean_html(p)) > 15]
+            if texts and sum(len(t) for t in texts) > 100:
+                result["content"] = '\n'.join(texts)
+                return result
+        
+        # 兜底：用 description
+        if description and len(description) > 30:
+            result["content"] = description
+            
+    except Exception as e:
+        logger.info(f"Readability fetch failed: {e}")
+    return result
+
+
 def fetch_article(url: str, timeout: int = 15) -> Dict[str, str]:
     result = {"title": "", "content": "", "source": "", "url": url, "error": None}
     try:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
 
+        # 识别来源
+        if "qq.com" in domain:
+            result["source"] = "腾讯新闻"
+        elif "toutiao" in domain or "today" in domain:
+            result["source"] = "今日头条"
+        elif "weibo" in domain:
+            result["source"] = "微博"
+        elif "weixin" in domain or "mp.weixin" in domain:
+            result["source"] = "微信公众号"
+        elif "bilibili" in domain or "b23.tv" in domain:
+            result["source"] = "B站"
+        elif "douyin" in domain:
+            result["source"] = "抖音"
+        elif "163.com" in domain:
+            result["source"] = "网易"
+        elif "sina.com" in domain:
+            result["source"] = "新浪"
+        elif "sohu.com" in domain:
+            result["source"] = "搜狐"
+        elif "baidu" in domain:
+            result["source"] = "百度"
+        else:
+            result["source"] = "网页"
+
+        # === 策略1：先尝试平台专用API ===
         if "qq.com" in domain:
             result = _fetch_qq_news(url, result, timeout)
-        elif "toutiao" in domain or "today" in domain:
-            result = _fetch_generic(url, result, timeout)
+            if result["content"] and len(result["content"]) > 50:
+                return result
         elif "weibo" in domain:
             result = _fetch_weibo(url, result, timeout)
-        else:
+            if result["content"] and len(result["content"]) > 50:
+                return result
+
+        # === 策略2：Jina Reader API（核心方案，支持JS渲染） ===
+        if not result["content"] or len(result["content"]) < 50:
+            logger.info(f"Using Jina Reader for: {url}")
+            jina_result = _fetch_via_jina(url, timeout=25)
+            if jina_result["content"] and len(jina_result["content"]) > 50:
+                if not result["title"] and jina_result["title"]:
+                    result["title"] = jina_result["title"]
+                result["content"] = jina_result["content"]
+                return result
+
+        # === 策略3：移动端UA直抓+增强解析 ===
+        if not result["content"] or len(result["content"]) < 50:
+            logger.info(f"Using enhanced readability for: {url}")
+            read_result = _fetch_via_readability_api(url, timeout)
+            if read_result["content"] and len(read_result["content"]) > 50:
+                if not result["title"] and read_result["title"]:
+                    result["title"] = read_result["title"]
+                result["content"] = read_result["content"]
+                return result
+
+        # === 策略4：旧的通用抓取作为最后兜底 ===
+        if not result["content"] or len(result["content"]) < 50:
             result = _fetch_generic(url, result, timeout)
 
-        if result["content"] and len(result["content"]) < 30 and not result["error"]:
+        # 过短的内容视为无效
+        if result["content"] and len(result["content"]) < 30:
             result["content"] = ""
+
     except urllib.error.URLError as e:
         result["error"] = f"网络请求失败: {str(e.reason)}"
     except Exception as e:
