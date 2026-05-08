@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>评论运营助手 - 团队版</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1100px; margin: 0 auto; }
+        .header {
+            text-align: center;
+            color: white;
+            padding: 30px 0 20px;
+        }
+        .header h1 { font-size: 28px; margin-bottom: 8px; text-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .header p { font-size: 14px; opacity: 0.9; }
+        .badge {
+            display: inline-block;
+            background: rgba(255,255,255,0.2);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            margin-top: 6px;
+        }
+        .card {
+            background: white;
+            border-radius: 16px;
+            padding: 28px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        .card h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 18px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card h2::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 20px;
+            background: linear-gradient(180deg, #667eea, #764ba2);
+            border-radius: 2px;
+        }
+        .form-group { margin-bottom: 16px; }
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 6px;
+            font-weight: 500;
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1.5px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        .form-group textarea { min-height: 80px; resize: vertical; }
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+        }
+        .btn {
+            padding: 12px 28px;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
+        }
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.5);
+        }
+        .btn-secondary { background: #f0f2f5; color: #333; }
+        .btn-secondary:hover:not(:disabled) { background: #e4e7ec; }
+        .btn-fetch {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            padding: 10px 20px;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        .btn-fetch:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(16, 185, 129, 0.4);
+        }
+        .btn-copy {
+            background: #10b981;
+            color: white;
+            padding: 6px 14px;
+            font-size: 12px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-copy:hover { background: #059669; }
+        .btn-sm { padding: 8px 16px; font-size: 13px; }
+        .url-input-group {
+            display: flex;
+            gap: 10px;
+            align-items: stretch;
+        }
+        .url-input-group input { flex: 1; }
+        .fetch-status {
+            font-size: 12px;
+            margin-top: 6px;
+            min-height: 18px;
+        }
+        .fetch-status.loading { color: #667eea; }
+        .fetch-status.success { color: #10b981; }
+        .fetch-status.error { color: #e74c3c; }
+        .comment-item {
+            background: #fafbfc;
+            border: 1px solid #eef0f2;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 10px;
+            position: relative;
+            transition: box-shadow 0.2s;
+        }
+        .comment-item:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.06); }
+        .comment-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: #999;
+        }
+        .comment-persona {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .comment-angle {
+            background: #e8f0fe;
+            color: #1a56db;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .comment-text { font-size: 14px; line-height: 1.6; color: #333; }
+        .comment-actions { position: absolute; right: 14px; top: 14px; }
+        .tone-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .tone-tag {
+            padding: 5px 12px;
+            border: 1.5px solid #e0e0e0;
+            border-radius: 20px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .tone-tag.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.08);
+            color: #667eea;
+            font-weight: 500;
+        }
+        .tone-tag:hover { border-color: #667eea; }
+        .hidden { display: none; }
+        .toolbar { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+        .result-count { font-size: 13px; color: #666; margin-bottom: 12px; }
+        .status-bar {
+            padding: 14px 20px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: none;
+        }
+        .status-bar.info { background: #e8f4fd; color: #0c4a6e; display: block; }
+        .status-bar.success { background: #d4edda; color: #155724; display: block; }
+        .status-bar.error { background: #f8d7da; color: #721c24; display: block; }
+        .status-bar.warning { background: #fff3cd; color: #856404; display: block; }
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .loading-spinner-dark {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(102,126,234,0.2);
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .extracted-info {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 14px;
+            margin-top: 12px;
+        }
+        .extracted-info h4 {
+            font-size: 13px;
+            color: #166534;
+            margin-bottom: 8px;
+        }
+        .extracted-info .title-text {
+            font-size: 15px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 6px;
+        }
+        .extracted-info .content-preview {
+            font-size: 13px;
+            color: #555;
+            line-height: 1.5;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        .server-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 8px;
+            font-size: 12px;
+            opacity: 0.95;
+            background: rgba(16, 185, 129, 0.2);
+            padding: 4px 12px;
+            border-radius: 8px;
+        }
+        .config-section {
+            border-top: 1px solid #eee;
+            padding-top: 16px;
+            margin-top: 16px;
+        }
+        .config-section summary {
+            cursor: pointer;
+            font-size: 13px;
+            color: #667eea;
+            font-weight: 500;
+        }
+        .config-fields {
+            margin-top: 12px;
+            padding: 16px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+        .input-row { display: flex; gap: 10px; }
+        .input-row input { flex: 1; }
+        .divider {
+            border: none;
+            border-top: 1px dashed #e0e0e0;
+            margin: 20px 0;
+        }
+        .or-badge {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin: -10px 0;
+        }
+        .or-badge span { background: white; padding: 0 12px; }
+        @media (max-width: 768px) {
+            .form-row { grid-template-columns: 1fr; }
+            .url-input-group { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 评论运营助手</h1>
+            <p>粘贴文章链接 → 自动提取内容 → 一键生成拟人化评论</p>
+            <span class="badge">✨ 团队版 · 真实抓取文章正文 · 精准评论</span>
+            <div class="server-status" id="backend-status">🟢 服务在线</div>
+        </div>
+
+        <div id="status-bar" class="status-bar"></div>
+
+        <div class="card" id="input-card">
+            <h2>一键生成评论</h2>
+            
+            <div class="form-group">
+                <label>🔗 文章链接（粘贴链接自动提取真实文章标题+正文）</label>
+                <div class="url-input-group">
+                    <input type="url" id="article-url" placeholder="粘贴文章链接，如：https://new.qq.com/rain/a/xxxxx">
+                    <button class="btn btn-fetch" id="fetch-btn" onclick="fetchArticle()">📥 提取文章</button>
+                </div>
+                <div class="fetch-status" id="fetch-status"></div>
+            </div>
+
+            <div class="extracted-info hidden" id="extracted-info">
+                <h4>✅ 已提取文章内容：</h4>
+                <div class="title-text" id="extracted-title"></div>
+                <div class="content-preview" id="extracted-content"></div>
+            </div>
+
+            <hr class="divider">
+            <div class="or-badge"><span>或者手动输入 ↓</span></div>
+
+            <div class="form-group">
+                <label>📰 文章标题（必填）</label>
+                <input type="text" id="article-title" placeholder="输入新闻标题">
+            </div>
+            
+            <div class="form-group">
+                <label>📄 文章正文或摘要（选填）</label>
+                <textarea id="article-content" rows="4" placeholder="可粘贴文章正文或简要描述"></textarea>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>文章垂类</label>
+                    <select id="category">
+                        <option value="通用">自动识别/通用</option>
+                        <option value="社会民生">社会民生</option>
+                        <option value="科技数码">科技数码</option>
+                        <option value="财经商业">财经商业</option>
+                        <option value="娱乐八卦">娱乐八卦</option>
+                        <option value="体育竞技">体育竞技</option>
+                        <option value="国际时事">国际时事</option>
+                        <option value="健康医疗">健康医疗</option>
+                        <option value="教育">教育</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>生成条数</label>
+                    <select id="count">
+                        <option value="5">5条</option>
+                        <option value="8">8条</option>
+                        <option value="10" selected>10条</option>
+                        <option value="15">15条</option>
+                        <option value="20">20条</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>补充要求</label>
+                    <input type="text" id="requirements" placeholder="如：多些幽默、正能量为主">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>评论基调偏好（可多选）</label>
+                <div class="tone-tags" id="tone-tags">
+                    <span class="tone-tag" data-tone="理性客观">理性客观</span>
+                    <span class="tone-tag" data-tone="感同身受">感同身受</span>
+                    <span class="tone-tag" data-tone="轻松幽默">轻松幽默</span>
+                    <span class="tone-tag" data-tone="正能量">正能量</span>
+                    <span class="tone-tag" data-tone="专业分析">专业分析</span>
+                    <span class="tone-tag" data-tone="吐槽犀利">吐槽犀利</span>
+                    <span class="tone-tag" data-tone="温情暖心">温情暖心</span>
+                    <span class="tone-tag" data-tone="反思深度">反思深度</span>
+                </div>
+            </div>
+
+            <div style="margin-top:18px;">
+                <button class="btn btn-primary" id="generate-btn" onclick="generateComments()">
+                    🚀 一键生成评论
+                </button>
+            </div>
+
+            <details class="config-section" id="config-section">
+                <summary>🔑 AI模型配置（首次使用需设置API Key）</summary>
+                <div class="config-fields">
+                    <div class="form-group">
+                        <label>API服务商</label>
+                        <select id="api-preset" onchange="applyPreset()">
+                            <option value="siliconflow">硅基流动 SiliconFlow（免费注册）</option>
+                            <option value="deepseek">DeepSeek（价格便宜）</option>
+                            <option value="openai">OpenAI / ChatGPT</option>
+                            <option value="custom">自定义地址</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>API Base URL</label>
+                        <input type="text" id="api-base" value="https://api.siliconflow.cn/v1">
+                    </div>
+                    <div class="form-group">
+                        <label>API Key <span style="color:#e74c3c">*必填</span></label>
+                        <div class="input-row">
+                            <input type="password" id="api-key" placeholder="sk-xxxxx（在对应平台获取）">
+                            <button class="btn btn-secondary btn-sm" onclick="toggleKeyVisibility()">👁️</button>
+                        </div>
+                        <div style="font-size:11px; color:#999; margin-top:4px;">
+                            硅基流动注册：<a href="https://cloud.siliconflow.cn" target="_blank">cloud.siliconflow.cn</a>（注册送免费额度）
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>模型名称</label>
+                        <input type="text" id="model-name" value="Qwen/Qwen2.5-7B-Instruct">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存配置</button>
+                    <span id="config-status" style="font-size:12px; margin-left:10px; color:#10b981;"></span>
+                </div>
+            </details>
+        </div>
+
+        <!-- 生成进度 -->
+        <div class="card hidden" id="progress-card">
+            <h2>⏳ 正在生成评论...</h2>
+            <div style="margin-top:16px;">
+                <div style="height:4px; background:#eee; border-radius:2px; overflow:hidden;">
+                    <div id="progress-bar" style="height:100%; width:0%; background:linear-gradient(90deg,#667eea,#764ba2); transition:width 0.5s;"></div>
+                </div>
+            </div>
+            <p style="margin-top:10px; font-size:12px; color:#999;">通常需要 10-30 秒</p>
+        </div>
+
+        <!-- 评论结果 -->
+        <div class="card hidden" id="result-card">
+            <h2>✅ 生成结果</h2>
+            <div class="result-count" id="result-count"></div>
+            <div id="comments-list"></div>
+            <div class="toolbar">
+                <button class="btn btn-primary" onclick="copyAllComments()">📋 一键复制全部</button>
+                <button class="btn btn-secondary" onclick="copyCommentsOnly()">📝 仅复制评论文本</button>
+                <button class="btn btn-secondary" onclick="exportCSV()">📊 导出CSV</button>
+                <button class="btn btn-secondary" onclick="regenerate()">🔄 重新生成</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let parsedComments = [];
+        let selectedTones = [];
+        let isGenerating = false;
+        let isFetching = false;
+
+        // ========== 初始化 ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            loadConfig();
+            checkBackend();
+
+            document.querySelectorAll('.tone-tag').forEach(tag => {
+                tag.addEventListener('click', () => {
+                    tag.classList.toggle('active');
+                    const tone = tag.dataset.tone;
+                    if (tag.classList.contains('active')) {
+                        selectedTones.push(tone);
+                    } else {
+                        selectedTones = selectedTones.filter(t => t !== tone);
+                    }
+                });
+            });
+
+            document.getElementById('article-url').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); fetchArticle(); }
+            });
+
+            document.getElementById('article-url').addEventListener('paste', () => {
+                setTimeout(() => {
+                    const url = document.getElementById('article-url').value.trim();
+                    if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                        fetchArticle();
+                    }
+                }, 100);
+            });
+        });
+
+        // ========== 后端检查 ==========
+        async function checkBackend() {
+            try {
+                const resp = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('backend-status').innerHTML = '🟢 服务在线';
+                    return true;
+                }
+            } catch(e) {}
+            document.getElementById('backend-status').innerHTML = '🔴 服务离线';
+            return false;
+        }
+
+        // ========== 文章抓取 ==========
+        async function fetchArticle() {
+            if (isFetching) return;
+            const url = document.getElementById('article-url').value.trim();
+            if (!url) { setFetchStatus('请先粘贴文章链接', 'error'); return; }
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                setFetchStatus('请输入有效的网址（以http://或https://开头）', 'error'); return;
+            }
+
+            isFetching = true;
+            const fetchBtn = document.getElementById('fetch-btn');
+            fetchBtn.disabled = true;
+            fetchBtn.innerHTML = '<span class="loading-spinner-dark"></span>提取中...';
+            setFetchStatus('<span class="loading-spinner-dark"></span>正在抓取文章内容...', 'loading');
+
+            try {
+                const resp = await fetch('/api/fetch_article', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url }),
+                    signal: AbortSignal.timeout(30000),
+                });
+                
+                if (resp.ok) {
+                    const data = await resp.json();
+                    if (data.error && !data.title && !data.content) {
+                        setFetchStatus(`⚠️ ${data.error}`, 'error');
+                    } else {
+                        document.getElementById('article-title').value = data.title || '';
+                        document.getElementById('article-content').value = data.content || '';
+                        document.getElementById('extracted-title').textContent = data.title || '(未能提取标题)';
+                        document.getElementById('extracted-content').textContent = 
+                            data.content ? (data.content.length > 500 ? data.content.slice(0, 500) + '...' : data.content) : '(未能提取正文)';
+                        document.getElementById('extracted-info').classList.remove('hidden');
+                        const len = (data.content || '').length;
+                        if (data.title && len > 50) {
+                            setFetchStatus(`✅ 提取成功！标题+正文（${len}字）已就绪`, 'success');
+                        } else if (data.title) {
+                            setFetchStatus(`✅ 标题已提取`, 'success');
+                        } else {
+                            setFetchStatus('⚠️ 部分提取，建议补充标题', 'success');
+                        }
+                    }
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    setFetchStatus(`⚠️ ${err.error || '请求失败'}`, 'error');
+                }
+            } catch(e) {
+                setFetchStatus(`⚠️ 网络错误：${e.message}`, 'error');
+            }
+
+            isFetching = false;
+            fetchBtn.disabled = false;
+            fetchBtn.innerHTML = '📥 提取文章';
+        }
+
+        function setFetchStatus(msg, type) {
+            const el = document.getElementById('fetch-status');
+            el.className = `fetch-status ${type}`;
+            el.innerHTML = msg;
+        }
+
+        // ========== 生成评论 ==========
+        async function generateComments() {
+            if (isGenerating) return;
+
+            const title = document.getElementById('article-title').value.trim();
+            const content = document.getElementById('article-content').value.trim();
+            const url = document.getElementById('article-url').value.trim();
+            const category = document.getElementById('category').value;
+            const count = parseInt(document.getElementById('count').value);
+            const requirements = document.getElementById('requirements').value.trim();
+            const apiKey = document.getElementById('api-key').value.trim();
+
+            if (!title && !content && !url) {
+                showStatus('请先粘贴文章链接或手动输入标题', 'error'); return;
+            }
+            if (!apiKey) {
+                showStatus('⚠️ 请先配置API Key（展开下方AI模型配置）', 'warning');
+                document.getElementById('config-section').open = true; return;
+            }
+
+            isGenerating = true;
+            const btn = document.getElementById('generate-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span>生成中...';
+            document.getElementById('progress-card').classList.remove('hidden');
+            document.getElementById('result-card').classList.add('hidden');
+            document.getElementById('progress-bar').style.width = '30%';
+
+            try {
+                const apiBase = document.getElementById('api-base').value.trim();
+                const model = document.getElementById('model-name').value.trim();
+                const tone = selectedTones.join('、');
+
+                document.getElementById('progress-bar').style.width = '50%';
+
+                const resp = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url, title, content, category, count,
+                        tone, requirements,
+                        api_key: apiKey,
+                        api_base: apiBase,
+                        model: model,
+                    }),
+                    signal: AbortSignal.timeout(120000),
+                });
+
+                document.getElementById('progress-bar').style.width = '80%';
+
+                if (resp.ok) {
+                    const data = await resp.json();
+                    parsedComments = data.comments || [];
+                    document.getElementById('progress-bar').style.width = '100%';
+
+                    if (parsedComments.length === 0) {
+                        throw new Error('未能生成评论，请重试');
+                    }
+                    displayComments();
+                    showStatus(`🎉 成功生成 ${parsedComments.length} 条评论！`, 'success');
+                } else {
+                    const err = await resp.json().catch(() => ({}));
+                    throw new Error(err.error || '生成失败');
+                }
+            } catch (err) {
+                showStatus(`❌ ${err.message}`, 'error');
+                document.getElementById('progress-card').classList.add('hidden');
+            } finally {
+                isGenerating = false;
+                btn.disabled = false;
+                btn.innerHTML = '🚀 一键生成评论';
+            }
+        }
+
+        // ========== 显示评论 ==========
+        function displayComments() {
+            const list = document.getElementById('comments-list');
+            document.getElementById('progress-card').classList.add('hidden');
+            document.getElementById('result-count').textContent = `共生成 ${parsedComments.length} 条评论`;
+
+            list.innerHTML = parsedComments.map((c, i) => `
+                <div class="comment-item">
+                    <div class="comment-actions">
+                        <button class="btn-copy" onclick="copySingle(${i}, this)">复制</button>
+                    </div>
+                    <div class="comment-meta">
+                        <span class="comment-persona">${esc(c.persona)}</span>
+                        ${c.angle ? `<span class="comment-angle">${esc(c.angle)}</span>` : ''}
+                        <span>#${i + 1}</span>
+                    </div>
+                    <div class="comment-text">${esc(c.comment)}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('result-card').classList.remove('hidden');
+            document.getElementById('result-card').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // ========== 复制 ==========
+        function copySingle(i, btn) {
+            copy(parsedComments[i].comment);
+            btn.textContent = '✓ 已复制';
+            setTimeout(() => btn.textContent = '复制', 1200);
+        }
+        function copyAllComments() {
+            const text = parsedComments.map((c, i) => `[${i+1}] ${c.persona} | ${c.angle}\n${c.comment}`).join('\n\n');
+            copy(text);
+            showStatus(`✅ 已复制${parsedComments.length}条评论`, 'success');
+        }
+        function copyCommentsOnly() {
+            copy(parsedComments.map(c => c.comment).join('\n\n'));
+            showStatus(`✅ 已复制纯文本`, 'success');
+        }
+        function copy(text) {
+            navigator.clipboard.writeText(text).catch(() => {
+                const ta = document.createElement('textarea');
+                ta.value = text; document.body.appendChild(ta);
+                ta.select(); document.execCommand('copy');
+                document.body.removeChild(ta);
+            });
+        }
+
+        // ========== 导出CSV ==========
+        function exportCSV() {
+            let csv = '\uFEFF编号,人设,角度,评论内容\n';
+            parsedComments.forEach((c, i) => {
+                csv += `${i+1},"${(c.persona||'').replace(/"/g,'""')}","${(c.angle||'').replace(/"/g,'""')}","${(c.comment||'').replace(/"/g,'""')}"\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `评论_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+        }
+
+        function regenerate() {
+            document.getElementById('result-card').classList.add('hidden');
+            generateComments();
+        }
+
+        // ========== 配置 ==========
+        const PRESETS = {
+            siliconflow: { base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+            deepseek: { base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+            openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+            custom: { base: '', model: '' },
+        };
+        function applyPreset() {
+            const p = PRESETS[document.getElementById('api-preset').value];
+            if (p) {
+                if (p.base) document.getElementById('api-base').value = p.base;
+                if (p.model) document.getElementById('model-name').value = p.model;
+            }
+        }
+        function toggleKeyVisibility() {
+            const input = document.getElementById('api-key');
+            input.type = input.type === 'password' ? 'text' : 'password';
+        }
+        function saveConfig() {
+            const cfg = {
+                api_base: document.getElementById('api-base').value.trim(),
+                api_key: document.getElementById('api-key').value.trim(),
+                model: document.getElementById('model-name').value.trim(),
+                preset: document.getElementById('api-preset').value,
+            };
+            if (!cfg.api_key) {
+                document.getElementById('config-status').textContent = '⚠️ 请填入API Key';
+                document.getElementById('config-status').style.color = '#e74c3c'; return;
+            }
+            localStorage.setItem('comment_assistant_config', JSON.stringify(cfg));
+            document.getElementById('config-status').textContent = '✅ 已保存';
+            document.getElementById('config-status').style.color = '#10b981';
+            setTimeout(() => document.getElementById('config-status').textContent = '', 3000);
+        }
+        function loadConfig() {
+            try {
+                const s = localStorage.getItem('comment_assistant_config');
+                if (s) {
+                    const c = JSON.parse(s);
+                    if (c.api_base) document.getElementById('api-base').value = c.api_base;
+                    if (c.api_key) document.getElementById('api-key').value = c.api_key;
+                    if (c.model) document.getElementById('model-name').value = c.model;
+                    if (c.preset) document.getElementById('api-preset').value = c.preset;
+                }
+            } catch(e) {}
+        }
+
+        // ========== 工具 ==========
+        function showStatus(msg, type) {
+            const bar = document.getElementById('status-bar');
+            bar.className = `status-bar ${type}`;
+            bar.innerHTML = msg;
+            if (type === 'success') setTimeout(() => bar.style.display = 'none', 5000);
+        }
+        function esc(t) {
+            if (!t) return '';
+            return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+    </script>
+</body>
+</html>
