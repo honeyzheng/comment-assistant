@@ -417,7 +417,7 @@
                     </div>
                     <div class="form-group">
                         <label>模型名称</label>
-                        <input type="text" id="model-name" value="Qwen/Qwen2.5-7B-Instruct">
+                        <input type="text" id="model-name" value="Qwen/Qwen2.5-72B-Instruct">
                     </div>
                     <button class="btn btn-primary btn-sm" onclick="saveConfig()">💾 保存配置</button>
                     <span id="config-status" style="font-size:12px; margin-left:10px; color:#10b981;"></span>
@@ -578,10 +578,6 @@
             if (!title && !content && !url) {
                 showStatus('请先粘贴文章链接或手动输入标题', 'error'); return;
             }
-            if (!apiKey) {
-                showStatus('⚠️ 请先配置API Key（展开下方AI模型配置）', 'warning');
-                document.getElementById('config-section').open = true; return;
-            }
 
             isGenerating = true;
             const btn = document.getElementById('generate-btn');
@@ -705,7 +701,7 @@
 
         // ========== 配置 ==========
         const PRESETS = {
-            siliconflow: { base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+            siliconflow: { base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-72B-Instruct' },
             deepseek: { base: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
             openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
             custom: { base: '', model: '' },
