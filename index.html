@@ -514,14 +514,14 @@
             const fetchBtn = document.getElementById('fetch-btn');
             fetchBtn.disabled = true;
             fetchBtn.innerHTML = '<span class="loading-spinner-dark"></span>提取中...';
-            setFetchStatus('<span class="loading-spinner-dark"></span>正在抓取文章内容...', 'loading');
+            setFetchStatus('<span class="loading-spinner-dark"></span>正在智能提取文章内容（视频/动态页面需10-20秒）...', 'loading');
 
             try {
                 const resp = await fetch('/api/fetch_article', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ url }),
-                    signal: AbortSignal.timeout(30000),
+                    signal: AbortSignal.timeout(60000),
                 });
                 
                 if (resp.ok) {
