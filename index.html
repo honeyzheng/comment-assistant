@@ -536,10 +536,14 @@
                             data.content ? (data.content.length > 500 ? data.content.slice(0, 500) + '...' : data.content) : '(未能提取正文)';
                         document.getElementById('extracted-info').classList.remove('hidden');
                         const len = (data.content || '').length;
-                        if (data.title && len > 50) {
+                        if (data.is_video && data.title) {
+                            setFetchStatus(`🎬 视频文章已识别！已提取标题和基本信息，可直接生成评论`, 'success');
+                        } else if (data.title && len > 50) {
                             setFetchStatus(`✅ 提取成功！标题+正文（${len}字）已就绪`, 'success');
+                        } else if (data.title && len > 0) {
+                            setFetchStatus(`✅ 已提取标题和摘要信息，可直接生成评论`, 'success');
                         } else if (data.title) {
-                            setFetchStatus(`✅ 标题已提取`, 'success');
+                            setFetchStatus(`✅ 标题已提取，建议补充正文或直接生成评论`, 'success');
                         } else {
                             setFetchStatus('⚠️ 部分提取，建议补充标题', 'success');
                         }
