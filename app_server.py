@@ -935,6 +935,7 @@ def generate_comments(title: str, content: str, category: str = "通用",
     
     # 检测是否为视频文章（包含热评参考）
     is_video_with_comments = "[视频文章]" in content and "热门评论" in content
+    is_video_without_comments = "[视频文章]" in content and "热门评论" not in content
 
     system_prompt = """你是一个互联网评论模拟器。你的唯一任务是输出真实用户风格的评论。
 规则：
@@ -944,7 +945,7 @@ def generate_comments(title: str, content: str, category: str = "通用",
 - 风格差异要大，像完全不同的人写的
 - 严格按JSON格式输出，不要有任何多余解释"""
 
-    # 视频文章增强prompt：利用热评信息深度理解内容
+    # 视频文章增强prompt
     if is_video_with_comments:
         extra_instruction = """
 注意：这是一个视频文章，我提供了该视频下的真实热门评论作为参考。
@@ -953,6 +954,15 @@ def generate_comments(title: str, content: str, category: str = "通用",
 2. 生成的评论要紧扣视频实际讨论的话题，不能泛泛而谈
 3. 可以借鉴热评的讨论方向，但不要复制热评内容
 4. 评论要像看完这个视频后的真实反应"""
+    elif is_video_without_comments:
+        extra_instruction = """
+注意：这是一个视频文章，无法获取视频语音转文字内容，但我提供了视频的元数据信息（标题、内容标签、频道、作者等）。
+请你：
+1. 根据标题和内容标签推断视频可能讨论的主题和情感基调
+2. 想象自己看完了这个视频后会产生什么真实反应
+3. 评论要具体、有针对性，围绕标题暗示的核心故事展开
+4. 避免太泛的"加油""好棒"类无信息量评论，要结合具体场景
+5. 可以从以下角度切入：共情故事主人公的经历、质疑转行的勇气、分享自己的类似经历、调侃或幽默回应"""
     else:
         extra_instruction = ""
 
