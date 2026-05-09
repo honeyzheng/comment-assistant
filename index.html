@@ -533,11 +533,13 @@
                         document.getElementById('article-content').value = data.content || '';
                         document.getElementById('extracted-title').textContent = data.title || '(未能提取标题)';
                         document.getElementById('extracted-content').textContent = 
-                            data.content ? (data.content.length > 500 ? data.content.slice(0, 500) + '...' : data.content) : '(未能提取正文)';
+                            data.content ? (data.content.length > 800 ? data.content.slice(0, 800) + '...' : data.content) : '(未能提取正文)';
                         document.getElementById('extracted-info').classList.remove('hidden');
                         const len = (data.content || '').length;
                         if (data.is_video && data.title) {
-                            setFetchStatus(`🎬 视频文章已识别！已提取标题和基本信息，可直接生成评论`, 'success');
+                            const hasHotComments = (data.content || '').includes('热门评论');
+                            const commentHint = hasHotComments ? '（含热门评论参考）' : '';
+                            setFetchStatus(`🎬 视频文章已识别！已提取标题+描述+标签${commentHint}，可生成评论`, 'success');
                         } else if (data.title && len > 50) {
                             setFetchStatus(`✅ 提取成功！标题+正文（${len}字）已就绪`, 'success');
                         } else if (data.title && len > 0) {
