@@ -260,6 +260,21 @@ def fetch_article(url: str, timeout: int = 15) -> Dict[str, str]:
         if "qq.com" in domain:
             result = _fetch_qq_news(url, result, timeout)
             if result["content"] and len(result["content"]) > 50:
+                # 视频文章：如果提取到的信息不够丰富（没有热评），尝试用Jina补充
+                if result.get("is_video") and "热门评论" not in result["content"]:
+                    try:
+                        logger.info("Video article lacks comments, trying Jina Reader for extra context")
+                        jina_result = _fetch_via_jina(url, timeout=20)
+                        if jina_result["content"] and len(jina_result["content"]) > 80:
+                            # 把 Jina 抓到的内容作为"页面文字内容"补充到后面
+                            jina_text = jina_result["content"]
+                            # 过滤掉和已有标题重复的部分
+                            if result["title"] and result["title"] in jina_text:
+                                jina_text = jina_text.replace(result["title"], "").strip()
+                            if len(jina_text) > 50:
+                                result["content"] += f"\n\n--- 页面补充内容 ---\n{jina_text[:600]}"
+                    except Exception as e:
+                        logger.info(f"Jina supplement for video failed: {e}")
                 return result
         elif "weibo" in domain:
             result = _fetch_weibo(url, result, timeout)
@@ -353,6 +368,71 @@ def _extract_json_from_html(html: str, var_name: str) -> dict:
         return {}
 
 
+def _fetch_qq_comments(article_id: str, cmt_id: str = "", timeout: int = 10) -> List[str]:
+    """抓取腾讯新闻文章的热门评论（用于补充视频文章的语境信息）"""
+    hot_comments = []
+    try:
+        # 方式1：coral评论API（需要cmt_id）
+        if cmt_id:
+            comment_url = f"http://coral.qq.com/article/{cmt_id}/comment?commentid=0&reqnum=20&tag=&callback=mainComment&_={random.randint(1000000000000,9999999999999)}"
+            try:
+                raw = _make_request(comment_url, timeout=timeout)
+                text = raw.decode("utf-8", errors="ignore")
+                # 去掉JSONP包裹
+                json_text = re.sub(r'^mainComment\((.*)\);?$', r'\1', text.strip(), flags=re.DOTALL)
+                data = json.loads(json_text)
+                comment_list = data.get("data", {}).get("commentid", [])
+                if comment_list:
+                    for c in comment_list[:15]:
+                        content = c.get("content", "").strip()
+                        up = int(c.get("up", 0) or 0)
+                        if content and len(content) > 3:
+                            hot_comments.append({"content": content, "up": up})
+            except Exception as e:
+                logger.info(f"Coral comment API failed: {e}")
+        
+        # 方式2：新版评论API（用article_id直接查）
+        if not hot_comments and article_id:
+            comment_apis = [
+                f"https://r.inews.qq.com/getQQNewsComment?article_id={article_id}&page=0&chlid=news_rss&qqnews_pgv_ref=aio",
+                f"https://pacaio.match.qq.com/irs/rcd?cid={article_id}&token=&ext=top&page=0&expIds=",
+            ]
+            for api_url in comment_apis:
+                try:
+                    raw = _make_request(api_url, headers=QQ_API_HEADERS, timeout=timeout)
+                    text = raw.decode("utf-8", errors="ignore")
+                    data = json.loads(text)
+                    if not isinstance(data, dict):
+                        continue
+                    # 不同API返回格式不同，安全获取
+                    comments_data = None
+                    data_inner = data.get("data", {})
+                    if isinstance(data_inner, dict):
+                        comments_data = data_inner.get("comments") or data_inner.get("comment_list")
+                    if not comments_data:
+                        comments_data = data.get("comments") or data.get("comment_list")
+                    
+                    if comments_data and isinstance(comments_data, list):
+                        for c in comments_data[:15]:
+                            if isinstance(c, dict):
+                                content = c.get("content", "") or c.get("comment_content", "") or c.get("text", "")
+                                up = int(c.get("up", 0) or c.get("agree_count", 0) or c.get("like_count", 0) or 0)
+                                if content and isinstance(content, str) and len(content.strip()) > 3:
+                                    hot_comments.append({"content": content.strip(), "up": up})
+                    if hot_comments:
+                        break
+                except Exception:
+                    continue
+        
+        # 按点赞数排序，取前10
+        if hot_comments:
+            hot_comments.sort(key=lambda x: x["up"], reverse=True)
+            return [c["content"] for c in hot_comments[:10]]
+    except Exception as e:
+        logger.info(f"Fetch QQ comments failed: {e}")
+    return hot_comments if isinstance(hot_comments, list) and all(isinstance(x, str) for x in hot_comments) else []
+
+
 def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
     """抓取腾讯新闻文章 - 通过解析页面中的 window.initData"""
     article_id = ""
@@ -381,6 +461,26 @@ def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
             if title_text and not result["title"]:
                 result["title"] = title_text
         
+        # 提取 og:description（对视频文章特别有用，通常包含内容摘要）
+        og_desc = ""
+        og_desc_match = re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]*)"', html)
+        if og_desc_match:
+            og_desc = og_desc_match.group(1).strip()
+        if not og_desc:
+            desc_match = re.search(r'<meta[^>]*name="description"[^>]*content="([^"]*)"', html)
+            if desc_match:
+                og_desc = desc_match.group(1).strip()
+        
+        # 提取 cmt_id（评论组ID，用于获取热评）
+        cmt_id = ""
+        cmt_match = re.search(r'cmt_id\s*=\s*"([^"]+)"', html)
+        if cmt_match:
+            cmt_id = cmt_match.group(1)
+        if not cmt_id:
+            cmt_match2 = re.search(r'"comment_id"\s*:\s*"([^"]+)"', html)
+            if cmt_match2:
+                cmt_id = cmt_match2.group(1)
+        
         # 解析 window.initData
         init_data = _extract_json_from_html(html, "window.initData")
         if init_data:
@@ -389,6 +489,10 @@ def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
                 # 获取标题
                 if not result["title"] and content_data.get("title"):
                     result["title"] = content_data["title"]
+                
+                # 从content_data中获取cmt_id（备选）
+                if not cmt_id:
+                    cmt_id = str(content_data.get("comment_id", "") or content_data.get("cmt_id", "") or "")
                 
                 atype = str(content_data.get("atype", ""))
                 
@@ -426,15 +530,24 @@ def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
                 
                 # 视频文章特殊处理（atype=4）
                 if atype == "4":
-                    # 构造视频文章的描述文本
+                    # 构造视频文章的描述文本 —— 尽量丰富
                     video_parts = []
-                    video_parts.append(f"[视频文章]")
+                    video_parts.append("[视频文章]")
                     
                     if result["title"]:
                         video_parts.append(f"标题：{result['title']}")
                     
                     if abstract:
                         video_parts.append(f"摘要：{abstract}")
+                    
+                    # og:description 通常比abstract更详细
+                    if og_desc and og_desc != abstract and len(og_desc) > 10:
+                        video_parts.append(f"内容描述：{og_desc}")
+                    
+                    # 发布时间
+                    pub_time = content_data.get("time", "")
+                    if pub_time:
+                        video_parts.append(f"发布时间：{pub_time}")
                     
                     # 获取频道/作者信息
                     card = content_data.get("card", {})
@@ -446,25 +559,133 @@ def _fetch_qq_news(url: str, result: Dict, timeout: int) -> Dict:
                             video_parts.append(f"频道：{chlname}")
                         if desc:
                             video_parts.append(f"频道简介：{desc}")
+                        if vip_desc and vip_desc != desc:
+                            video_parts.append(f"作者认证：{vip_desc}")
                     
-                    # 视频信息
-                    video_info = content_data.get("videoInfo") or content_data.get("videoNewsInfo") or {}
-                    if isinstance(video_info, dict):
-                        v_desc = video_info.get("desc", "") or video_info.get("description", "")
-                        if v_desc:
-                            video_parts.append(f"视频描述：{v_desc}")
+                    # 来源
+                    source_name = content_data.get("source", "")
+                    if source_name and source_name != card.get("chlname", ""):
+                        video_parts.append(f"来源：{source_name}")
+                    
+                    # 作者信息（另一种结构）
+                    media_info = content_data.get("media", {})
+                    if isinstance(media_info, dict):
+                        media_name = media_info.get("name", "") or media_info.get("nick", "")
+                        media_desc = media_info.get("desc", "") or media_info.get("introduction", "")
+                        if media_name and media_name != card.get("chlname", ""):
+                            video_parts.append(f"作者：{media_name}")
+                        if media_desc and media_desc != card.get("desc", ""):
+                            video_parts.append(f"作者简介：{media_desc}")
+                    
+                    # 视频信息 - 从 video_channel 获取
+                    video_channel = content_data.get("video_channel", {})
+                    if isinstance(video_channel, dict):
+                        video_obj = video_channel.get("video", {})
+                        if isinstance(video_obj, dict):
+                            v_desc = video_obj.get("desc", "") or video_obj.get("description", "")
+                            v_duration = video_obj.get("duration", "")
+                            if v_desc:
+                                video_parts.append(f"视频描述：{v_desc}")
+                            if v_duration:
+                                video_parts.append(f"视频时长：{v_duration}")
+                    
+                    # 备选视频信息字段
+                    if not video_channel:
+                        video_info = content_data.get("videoInfo") or content_data.get("videoNewsInfo") or {}
+                        if isinstance(video_info, dict):
+                            v_desc = video_info.get("desc", "") or video_info.get("description", "")
+                            v_duration = video_info.get("duration", "") or video_info.get("time", "")
+                            if v_desc:
+                                video_parts.append(f"视频描述：{v_desc}")
+                            if v_duration:
+                                video_parts.append(f"视频时长：{v_duration}")
                     
                     # 获取评论数、点赞等互动信息
-                    comments = content_data.get("comments", "")
-                    if comments:
-                        video_parts.append(f"评论数：{comments}")
+                    comments_count = content_data.get("comments", "") or content_data.get("comment_num", "")
+                    if comments_count:
+                        video_parts.append(f"评论数：{comments_count}")
                     
-                    # 相关标签
-                    tag_info = content_data.get("tag_info_item", [])
-                    if tag_info and isinstance(tag_info, list):
+                    like_count = content_data.get("like_count", "") or content_data.get("praiseTimes", "") or content_data.get("likeInfo", "")
+                    if like_count and like_count != 1:  # likeInfo=1 means enabled, not count
+                        video_parts.append(f"点赞数：{like_count}")
+                    
+                    share_count = content_data.get("share_count", "")
+                    if share_count:
+                        video_parts.append(f"分享数：{share_count}")
+                    
+                    collect_count = content_data.get("collect_count", "")
+                    if collect_count:
+                        video_parts.append(f"收藏数：{collect_count}")
+                    
+                    # === 核心：AI内容标签（tag_news_rec）—— 最有价值的语义信息 ===
+                    tag_news_rec = content_data.get("tag_news_rec", {})
+                    if isinstance(tag_news_rec, dict):
+                        rec_tags = tag_news_rec.get("tags", [])
+                        if rec_tags and isinstance(rec_tags, list):
+                            tag_names = [t.get("name", "") for t in rec_tags if isinstance(t, dict) and t.get("name")]
+                            if tag_names:
+                                video_parts.append(f"内容标签：{'、'.join(tag_names)}")
+                    
+                    # 相关标签/关键词（tag_info_item）
+                    tag_info = content_data.get("tag_info_item", {})
+                    if isinstance(tag_info, list):
                         tags = [t.get("name", "") for t in tag_info if isinstance(t, dict) and t.get("name")]
                         if tags:
-                            video_parts.append(f"标签：{'、'.join(tags)}")
+                            video_parts.append(f"话题标签：{'、'.join(tags)}")
+                    elif isinstance(tag_info, dict) and tag_info.get("name"):
+                        video_parts.append(f"话题标签：{tag_info['name']}")
+                    
+                    # keywords字段
+                    keywords = content_data.get("keywords", "") or content_data.get("keyword", "")
+                    if keywords and isinstance(keywords, str) and keywords.strip():
+                        video_parts.append(f"关键词：{keywords}")
+                    elif keywords and isinstance(keywords, list):
+                        video_parts.append(f"关键词：{'、'.join(keywords)}")
+                    
+                    # 专题信息（match_info）
+                    match_info = content_data.get("match_info", {})
+                    if isinstance(match_info, dict):
+                        match_content = match_info.get("content", "")
+                        if match_content and len(match_content.strip()) > 2:
+                            video_parts.append(f"所属专题：{match_content}")
+                    
+                    # 相关事件线（relate_eventinfos）— 可能包含关键词和背景
+                    relate_events = content_data.get("relate_eventinfos", [])
+                    if isinstance(relate_events, list):
+                        for event in relate_events[:2]:
+                            if isinstance(event, dict):
+                                basic = event.get("basic", {})
+                                if isinstance(basic, dict):
+                                    event_name = basic.get("name", "") or basic.get("event_name", "")
+                                    if event_name:
+                                        video_parts.append(f"相关事件：{event_name}")
+                    
+                    # 分享信息中的副标题（有时包含额外描述）
+                    share_info = content_data.get("shareInfo", {})
+                    if isinstance(share_info, dict):
+                        share_subtitle = share_info.get("shareSubTitle", "")
+                        if share_subtitle and "【视频】" in share_subtitle:
+                            # 去掉"【视频】作者：xxx"这种无用信息
+                            pass
+                        elif share_subtitle and len(share_subtitle) > 10:
+                            video_parts.append(f"分享描述：{share_subtitle}")
+                    
+                    # IP所在地
+                    user_address = content_data.get("userAddress", "")
+                    if user_address:
+                        video_parts.append(f"发布地：{user_address}")
+                    
+                    # === 核心增强：抓取热门评论 ===
+                    # 优先使用 commentid 字段
+                    effective_cmt_id = cmt_id or str(content_data.get("commentid", ""))
+                    try:
+                        hot_comments = _fetch_qq_comments(article_id, effective_cmt_id, timeout=8)
+                        if hot_comments:
+                            video_parts.append(f"\n--- 热门评论（共{len(hot_comments)}条）---")
+                            for i, comment in enumerate(hot_comments[:10], 1):
+                                video_parts.append(f"  {i}. {comment}")
+                    except Exception as e:
+                        logger.info(f"Fetch hot comments failed: {e}")
                     
                     if len(video_parts) > 2:  # 至少有类型标记+标题+其他信息
                         result["content"] = "\n".join(video_parts)
@@ -710,7 +931,10 @@ def call_ai(prompt: str, system_prompt: str = "", config: Dict = None) -> str:
 def generate_comments(title: str, content: str, category: str = "通用",
                       count: int = 10, tone: str = "", requirements: str = "",
                       config: Dict = None) -> List[Dict]:
-    content_preview = content[:800] if content else "（无正文）"
+    content_preview = content[:1200] if content else "（无正文）"
+    
+    # 检测是否为视频文章（包含热评参考）
+    is_video_with_comments = "[视频文章]" in content and "热门评论" in content
 
     system_prompt = """你是一个互联网评论模拟器。你的唯一任务是输出真实用户风格的评论。
 规则：
@@ -720,6 +944,18 @@ def generate_comments(title: str, content: str, category: str = "通用",
 - 风格差异要大，像完全不同的人写的
 - 严格按JSON格式输出，不要有任何多余解释"""
 
+    # 视频文章增强prompt：利用热评信息深度理解内容
+    if is_video_with_comments:
+        extra_instruction = """
+注意：这是一个视频文章，我提供了该视频下的真实热门评论作为参考。
+请你：
+1. 通过标题+描述+热门评论来推断视频的核心内容和讨论点
+2. 生成的评论要紧扣视频实际讨论的话题，不能泛泛而谈
+3. 可以借鉴热评的讨论方向，但不要复制热评内容
+4. 评论要像看完这个视频后的真实反应"""
+    else:
+        extra_instruction = ""
+
     user_prompt = f"""为这篇文章生成{count}条拟人评论：
 
 标题：{title}
@@ -727,6 +963,7 @@ def generate_comments(title: str, content: str, category: str = "通用",
 垂类：{category}
 {f'基调偏好：{tone}' if tone else ''}
 {f'特殊要求：{requirements}' if requirements else ''}
+{extra_instruction}
 
 直接输出JSON数组，格式：
 [{{"comment":"评论内容","persona":"人设标签","angle":"评论角度"}}]
